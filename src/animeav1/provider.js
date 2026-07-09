@@ -11,19 +11,24 @@ const HTTP_HEADERS = {
 
 // --- Utilidades ---
 async function fetchHtml(url) {
-  console.log("[AnimeAV1] Fetching:", url);
+  console.log("[AnimeAV1] 🔍 Fetching:", url);
   const response = await fetch(url, { headers: HTTP_HEADERS });
   if (!response.ok) {
     throw new Error(`Error ${response.status} al obtener ${url}`);
   }
-  return await response.text();
+  const html = await response.text();
+  console.log(`[AnimeAV1] 📄 HTML recibido, longitud: ${html.length} caracteres`);
+  // Mostrar los primeros 300 caracteres para identificar la estructura
+  console.log("[AnimeAV1] 📄 Preview HTML:", html.substring(0, 300));
+  return html;
 }
 
 function extractEpisodesFromHtml(html, baseUrl) {
+  console.log("[AnimeAV1] 🔎 Extrayendo episodios del HTML...");
   const episodes = [];
-  // Buscar todos los enlaces a episodios en el formato /media/slug/numero
   const regex = /href="\/media\/([^\/]+)\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let match;
+  let count = 0;
   while ((match = regex.exec(html)) !== null) {
     const slug = match[1];
     const epNumber = parseInt(match[2], 10);
@@ -35,18 +40,21 @@ function extractEpisodesFromHtml(html, baseUrl) {
       title: title,
       url: `https://${DEFAULT_DOMAIN}/media/${slug}/${epNumber}`,
     });
+    count++;
   }
-  
-  // Si no encontró con el patrón anterior, intentar con uno más simple
+  console.log(`[AnimeAV1] 🔎 Encontrados ${count} episodios con el patrón principal.`);
+
+  // Fallback si no encontró nada
   if (episodes.length === 0) {
+    console.log("[AnimeAV1] ⚠️ No se encontraron episodios con el patrón principal, usando fallback...");
     const altRegex = /href="\/media\/[^\/]+\/(\d+)"/gi;
     let altMatch;
     const seen = new Set();
+    let fallbackCount = 0;
     while ((altMatch = altRegex.exec(html)) !== null) {
       const epNumber = parseInt(altMatch[1], 10);
       if (!isNaN(epNumber) && !seen.has(epNumber)) {
         seen.add(epNumber);
-        // Intentar extraer el slug de la URL base
         const slugMatch = baseUrl.match(/\/media\/([^\/]+)/);
         const slug = slugMatch ? slugMatch[1] : "anime";
         episodes.push({
@@ -55,31 +63,74 @@ function extractEpisodesFromHtml(html, baseUrl) {
           title: `Episodio ${epNumber}`,
           url: `https://${DEFAULT_DOMAIN}/media/${slug}/${epNumber}`,
         });
+        fallbackCount++;
       }
     }
+    console.log(`[AnimeAV1] 🔎 Fallback: encontrados ${fallbackCount} episodios adicionales.`);
   }
-  
+
   episodes.sort((a, b) => a.number - b.number);
+  console.log(`[AnimeAV1] ✅ Total episodios extraídos: ${episodes.length}`);
   return episodes;
 }
 
-function extractVideoLinks(html) {
-  // Buscar cualquier URL de video o stream
-  const urlRegex = /https?:\/\/(?:www\.)?(?:pixeldrain\.com|mega\.nz|mp4upload\.com|1fichier\.com|player\.[^\s"'<>]+|[^\s"'<>]*zilla[^\s"'<>]*|[^\s"'<>]*uns\.bio[^\s"'<>]*)[^\s"'<>]*/gi;
-  const found = html.match(urlRegex) || [];
-  
-  // Si no encuentra enlaces, buscar en scripts
-  if (found.length === 0) {
-    const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
-    let scriptMatch;
-    while ((scriptMatch = scriptRegex.exec(html)) !== null) {
-      const scriptContent = scriptMatch[1];
-      const scriptUrls = scriptContent.match(urlRegex);
-      if (scriptUrls) {
-        return scriptUrls;
+function extractVideoLinks(html, url) {
+  console.log("[AnimeAV1] 🎬 Extrayendo enlaces de video del HTML...");
+
+  // 1. Buscar enlaces en atributos src, href, data-src, etc.
+  const attrRegex = /(?:src|href|data-src|data-href)=["']([^"']*\.(?:m3u8|mp4|webm|mkv|avi|embed|player|pixeldrain|mega|mp4upload|1fichier|zilla|uns\.bio)[^"']*)["']/gi;
+  let match;
+  const found = [];
+  while ((match = attrRegex.exec(html)) !== null) {
+    let videoUrl = match[1];
+    if (!videoUrl.startsWith('http://') && !videoUrl.startsWith('https://')) {
+      // Si es relativa, intentar completar con la URL base
+      try {
+        const base = new URL(url);
+        videoUrl = new URL(videoUrl, base.origin).toString();
+      } catch (_) {
+        continue;
       }
     }
+    if (videoUrl) {
+      found.push(videoUrl);
+    }
   }
+
+  // 2. Si no encontró, buscar cualquier URL que parezca un stream con regex general
+  if (found.length === 0) {
+    console.log("[AnimeAV1] ⚠️ No se encontraron enlaces en atributos, usando regex general...");
+    const generalRegex = /https?:\/\/(?:www\.)?(?:pixeldrain\.com|mega\.nz|mp4upload\.com|1fichier\.com|player\.[^\s"'<>]+|[^\s"'<>]*zilla[^\s"'<>]*|[^\s"'<>]*uns\.bio[^\s"'<>]*)[^\s"'<>]*/gi;
+    const generalUrls = html.match(generalRegex) || [];
+    generalUrls.forEach(u => {
+      if (!found.includes(u)) found.push(u);
+    });
+  }
+
+  // 3. Si sigue sin encontrar, buscar en scripts
+  if (found.length === 0) {
+    console.log("[AnimeAV1] ⚠️ No se encontraron enlaces con regex general, buscando en scripts...");
+    const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+    let scriptMatch;
+    const scriptUrls = [];
+    while ((scriptMatch = scriptRegex.exec(html)) !== null) {
+      const scriptContent = scriptMatch[1];
+      const urls = scriptContent.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|embed|player|pixeldrain|mega|mp4upload|1fichier|zilla|uns\.bio)[^\s"'<>]*/gi) || [];
+      scriptUrls.push(...urls);
+    }
+    scriptUrls.forEach(u => {
+      if (!found.includes(u)) found.push(u);
+    });
+  }
+
+  // 4. Último recurso: mostrar un aviso
+  if (found.length === 0) {
+    console.log("[AnimeAV1] ❌ No se encontraron enlaces de video en el HTML.");
+  } else {
+    console.log(`[AnimeAV1] ✅ Enlaces de video encontrados: ${found.length}`);
+    found.forEach((u, i) => console.log(`  ${i+1}. ${u}`));
+  }
+
   return found;
 }
 
@@ -98,9 +149,9 @@ class Provider {
     try {
       const query = encodeURIComponent(opts.query.trim());
       const url = `https://${DEFAULT_DOMAIN}/catalogo?search=${query}`;
+      console.log("[AnimeAV1] 🔍 Buscando:", opts.query);
       const html = await fetchHtml(url);
-      
-      // Extraer resultados de búsqueda
+
       const results = [];
       const regex = /<a[^>]*href="\/media\/([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
       let match;
@@ -108,7 +159,6 @@ class Provider {
         const slug = match[1];
         const titleMatch = /<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i.exec(match[2]);
         const title = titleMatch ? titleMatch[1].trim() : slug;
-        // Evitar duplicados
         if (!results.some(r => r.id === slug)) {
           results.push({
             id: slug,
@@ -118,19 +168,22 @@ class Provider {
           });
         }
       }
+      console.log(`[AnimeAV1] ✅ Resultados de búsqueda: ${results.length}`);
       return results.slice(0, 20);
     } catch (error) {
-      console.error("Error en search:", error);
+      console.error("[AnimeAV1] ❌ Error en search:", error);
       return [];
     }
   }
 
   async findEpisodes(id) {
+    console.log(`[AnimeAV1] 📺 Buscando episodios para: ${id}`);
     this.currentSlug = id;
     try {
       const url = `https://${DEFAULT_DOMAIN}/media/${id}`;
       const html = await fetchHtml(url);
       const episodes = extractEpisodesFromHtml(html, url);
+      console.log(`[AnimeAV1] ✅ Episodios encontrados: ${episodes.length}`);
       return episodes.map(ep => ({
         id: ep.id,
         number: ep.number,
@@ -138,32 +191,40 @@ class Provider {
         title: ep.title,
       }));
     } catch (error) {
-      console.error("Error en findEpisodes:", error);
+      console.error("[AnimeAV1] ❌ Error en findEpisodes:", error);
       return [];
     }
   }
 
   async findEpisodeServer(episode, server) {
+    console.log(`[AnimeAV1] 🎬 Buscando servidor para episodio:`, episode);
+    console.log(`[AnimeAV1] 🎬 Slug actual: ${this.currentSlug}`);
     try {
       const episodeUrl = `https://${DEFAULT_DOMAIN}/media/${this.currentSlug}/${episode.id}`;
+      console.log(`[AnimeAV1] 🎬 URL del episodio: ${episodeUrl}`);
       const html = await fetchHtml(episodeUrl);
-      const videoUrls = extractVideoLinks(html);
-      
+      const videoUrls = extractVideoLinks(html, episodeUrl);
+
       if (videoUrls.length === 0) {
+        console.log("[AnimeAV1] ⚠️ No se encontraron URLs de video, devolviendo videoSources vacío.");
         return { server: "AnimeAV1", headers: {}, videoSources: [] };
       }
-      
+
+      // Construir videoSources a partir de los enlaces encontrados
+      const videoSources = videoUrls.map(url => ({
+        url: url,
+        type: url.includes('.m3u8') ? 'm3u8' : 'mp4',
+        quality: '1080p',
+      }));
+
+      console.log(`[AnimeAV1] ✅ Devolviendo ${videoSources.length} fuentes de video.`);
       return {
         server: "AnimeAV1",
         headers: {},
-        videoSources: videoUrls.map(url => ({
-          url: url,
-          type: url.includes('.m3u8') ? 'm3u8' : 'mp4',
-          quality: '1080p',
-        })),
+        videoSources: videoSources,
       };
     } catch (error) {
-      console.error("Error en findEpisodeServer:", error);
+      console.error("[AnimeAV1] ❌ Error en findEpisodeServer:", error);
       return { server: "AnimeAV1", headers: {}, videoSources: [] };
     }
   }
