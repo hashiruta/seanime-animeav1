@@ -10,9 +10,16 @@ const HTTP_HEADERS = {
 };
 
 async function fetchHtml(url) {
+  console.log("[AnimeAV1] Fetching:", url);
   const response = await fetch(url, { headers: HTTP_HEADERS });
-  if (!response.ok) throw new Error(`Error ${response.status} al obtener ${url}`);
-  return await response.text();
+  if (!response.ok) {
+    throw new Error(`Error ${response.status} al obtener ${url}`);
+  }
+  const html = await response.text();
+  console.log("[AnimeAV1] HTML length:", html.length);
+  // Muestra los primeros 500 caracteres para depurar
+  console.log("[AnimeAV1] HTML preview:", html.substring(0, 500));
+  return html;
 }
 
 function extractSvelteData(html) {
@@ -87,7 +94,61 @@ async function getAnimeInfo(url) {
   try {
     const html = await fetchHtml(url);
     const svelteData = extractSvelteData(html);
-    if (!svelteData) throw new Error("No se encontraron datos Svelte");
+    if (!svelteData) {
+      // Fallback: parsear el HTML directamente
+      console.log("[AnimeAV1] No se encontraron datos Svelte, usando fallback HTML");
+      const episodes = [];
+      // Buscar enlaces a episodios (ej. /media/slug/1)
+      const epRegex = /<a[^>]*href="\/media\/[^/]+\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
+      let match;
+      while ((match = epRegex.exec(html)) !== null) {
+        const epNumber = parseInt(match[1], 10);
+        const title = match[2].replace(/<[^>]*>/g, '').trim() || `Episodio ${epNumber}`;
+        episodes.push({
+          id: String(epNumber),
+          number: epNumber,
+          title: title,
+          url: `${url}/${epNumber}`,
+        });
+      }
+      // Si no encuentra episodios, intentar con otro patrón
+      if (episodes.length === 0) {
+        const altRegex = /href="\/media\/[^/]+\/(\d+)"[^>]*>/gi;
+        let altMatch;
+        const epSet = new Set();
+        while ((altMatch = altRegex.exec(html)) !== null) {
+          const epNumber = parseInt(altMatch[1], 10);
+          if (!isNaN(epNumber) && !epSet.has(epNumber)) {
+            epSet.add(epNumber);
+            episodes.push({
+              id: String(epNumber),
+              number: epNumber,
+              title: `Episodio ${epNumber}`,
+              url: `${url}/${epNumber}`,
+            });
+          }
+        }
+      }
+      // Ordenar por número
+      episodes.sort((a, b) => a.number - b.number);
+      if (episodes.length === 0) {
+        throw new Error("No se encontraron episodios en el HTML");
+      }
+      // Extraer título del anime
+      const titleMatch = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
+      const title = titleMatch ? titleMatch[1].trim() : "Anime sin título";
+      return {
+        id: null,
+        title: title,
+        description: "",
+        image: null,
+        genres: [],
+        episodes: episodes,
+        slug: new URL(url).pathname.split('/').pop() || "",
+      };
+    }
+
+    // Si hay datos Svelte, procesar normalmente
     let media = null;
     for (const item of svelteData) {
       if (item?.title && item?.episodes) { media = item; break; }
@@ -118,7 +179,17 @@ async function getEpisodeLinks(episodeUrl) {
   try {
     const html = await fetchHtml(episodeUrl);
     const svelteData = extractSvelteData(html);
-    if (!svelteData) throw new Error("No se encontraron datos Svelte");
+    if (!svelteData) {
+      // Fallback: buscar enlaces de video en el HTML
+      console.log("[AnimeAV1] No se encontraron datos Svelte, buscando enlaces en HTML");
+      const urlRegex = /https?:\/\/(?:www\.)?(?:pixeldrain\.com|mega\.nz|mp4upload\.com|1fichier\.com|player\.[^\s"'<>]+|[^\s"'<>]*zilla[^\s"'<>]*|[^\s"'<>]*uns\.bio[^\s"'<>]*)[^\s"'<>]*/gi;
+      const found = html.match(urlRegex) || [];
+      if (found.length > 0) {
+        console.log("[AnimeAV1] Enlaces encontrados:", found);
+        return found;
+      }
+      return [];
+    }
     let episodeData = null;
     for (const item of svelteData) {
       if (item?.episode && (item?.streamLinks || item?.downloadLinks)) {
