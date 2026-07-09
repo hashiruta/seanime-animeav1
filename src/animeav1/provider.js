@@ -1,6 +1,5 @@
 /// <reference path="./online-streaming-provider.d.ts" />
 
-// --- Configuración ---
 const DEFAULT_DOMAIN = "animeav1.com";
 
 const HTTP_HEADERS = {
@@ -9,21 +8,18 @@ const HTTP_HEADERS = {
   "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
 };
 
-// --- Utilidades ---
 async function fetchHtml(url) {
   const response = await fetch(url, { headers: HTTP_HEADERS });
   if (!response.ok) {
     throw new Error(`Error ${response.status} al obtener ${url}`);
   }
-  const html = await response.text();
-  return html;
+  return await response.text();
 }
 
 function extractEpisodesFromHtml(html, baseUrl) {
   const episodes = [];
   const regex = /href="\/media\/([^\/]+)\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let match;
-  let count = 0;
   while ((match = regex.exec(html)) !== null) {
     const slug = match[1];
     const epNumber = parseInt(match[2], 10);
@@ -35,14 +31,12 @@ function extractEpisodesFromHtml(html, baseUrl) {
       title: title,
       url: `https://${DEFAULT_DOMAIN}/media/${slug}/${epNumber}`,
     });
-    count++;
   }
 
   if (episodes.length === 0) {
     const altRegex = /href="\/media\/[^\/]+\/(\d+)"/gi;
     let altMatch;
     const seen = new Set();
-    let fallbackCount = 0;
     while ((altMatch = altRegex.exec(html)) !== null) {
       const epNumber = parseInt(altMatch[1], 10);
       if (!isNaN(epNumber) && !seen.has(epNumber)) {
@@ -55,7 +49,6 @@ function extractEpisodesFromHtml(html, baseUrl) {
           title: `Episodio ${epNumber}`,
           url: `https://${DEFAULT_DOMAIN}/media/${slug}/${epNumber}`,
         });
-        fallbackCount++;
       }
     }
   }
@@ -63,10 +56,10 @@ function extractEpisodesFromHtml(html, baseUrl) {
   episodes.sort((a, b) => a.number - b.number);
   return episodes;
 }
+
 function extractVideoLinks(html, url) {
   const found = [];
 
-  // 1. Buscar en atributos src, href, data-src, data-href
   const attrRegex = /(?:src|href|data-src|data-href)=["']([^"']*\.(?:m3u8|mp4|webm|mkv|avi|embed|player|pixeldrain|mega|mp4upload|1fichier|zilla|uns\.bio)[^"']*)["']/gi;
   let match;
   while ((match = attrRegex.exec(html)) !== null) {
@@ -82,14 +75,12 @@ function extractVideoLinks(html, url) {
     }
   }
 
-  // 2. Si no encontró, buscar cualquier URL que parezca un stream
   if (found.length === 0) {
     const generalRegex = /https?:\/\/(?:www\.)?(?:pixeldrain\.com|mega\.nz|mp4upload\.com|1fichier\.com|player\.[^\s"'<>]+|[^\s"'<>]*zilla[^\s"'<>]*|[^\s"'<>]*uns\.bio[^\s"'<>]*)[^\s"'<>]*/gi;
     const generalUrls = html.match(generalRegex) || [];
     generalUrls.forEach(u => { if (!found.includes(u)) found.push(u); });
   }
 
-  // 3. Buscar en scripts
   if (found.length === 0) {
     const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
     let scriptMatch;
@@ -100,14 +91,9 @@ function extractVideoLinks(html, url) {
     }
   }
 
-  if (found.length === 0) {
-  } else {
-    found.forEach((u, i) => console.log(`  ${i+1}. ${u}`));
-  }
   return found;
 }
 
-// --- Clase Provider ---
 class Provider {
   constructor() {
     this.currentSlug = null;
@@ -164,7 +150,6 @@ class Provider {
   }
 
   async findEpisodeServer(episode, server) {
-    // Si currentSlug no está definido, intentar extraerlo de la URL del episodio
     let slug = this.currentSlug;
     if (!slug && episode.url) {
       const match = episode.url.match(/\/media\/([^\/]+)\//);
@@ -191,7 +176,9 @@ class Provider {
 
       return {
         server: "AnimeAV1",
-        headers: {},
+        headers: {
+          "Referer": "https://animeav1.com/"
+        },
         videoSources: videoSources,
       };
     } catch (error) {
