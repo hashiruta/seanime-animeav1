@@ -94,6 +94,101 @@ function extractVideoLinks(html, url) {
   return found;
 }
 
+async function resolveStreamwish(url) {
+  try {
+    const html = await fetchHtml(url);
+    let match = html.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/i);
+    if (match && match[1]) return match[1];
+    match = html.match(/data-src=["']([^"']+\.m3u8[^"']*)["']/i);
+    if (match && match[1]) return match[1];
+    const scriptMatch = html.match(/<script[^>]*>([\s\S]*?var\s+sources\s*=\s*\[[\s\S]*?\];[\s\S]*?)<\/script>/i);
+    if (scriptMatch) {
+      const urlMatch = scriptMatch[1].match(/src\s*:\s*["'](https?:\/\/[^"']+)["']/i);
+      if (urlMatch && urlMatch[1]) return urlMatch[1];
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function resolveStreamtape(url) {
+  try {
+    const html = await fetchHtml(url);
+    const match = html.match(/document\.getElementById\('norobotlink'\)\.innerHTML\s*=\s*(.+?);/);
+    if (!match) return null;
+    const tokenMatch = match[1].match(/token=([^&']+)/);
+    if (!tokenMatch) return null;
+    const token = tokenMatch[1];
+    const streamtapeMatch = html.match(/id\s*=\s*"ideoooolink"/);
+    if (!streamtapeMatch) return null;
+    const tagEnd = html.indexOf(">", streamtapeMatch.index) + 1;
+    const videoUrl = html.substring(tagEnd, html.indexOf("<", tagEnd));
+    return `https:${videoUrl}&token=${token}&dl=1`;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function resolveVoe(url) {
+  try {
+    const html = await fetchHtml(url);
+    let match = html.match(/(https?:\/\/[^\s"'<>]+\.(?:mp4|m3u8)[^\s"'<>]*)/i);
+    if (match && match[1]) return match[1];
+    match = html.match(/src=["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i);
+    if (match && match[1]) return match[1];
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function resolveMP4Upload(url) {
+  try {
+    const html = await fetchHtml(url);
+    const match = html.match(/<script(?:.|\n)+?src:(?:.|\n)*?"(.+?\.mp4)"/);
+    if (match && match[1]) return match[1];
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function resolvePDrain(url) {
+  try {
+    const match = url.match(/(.+?:\/\/.+?)\/.+?\/(.+?)(?:\?embed)?$/);
+    if (match && match[1] && match[2]) {
+      return `${match[1]}/api/file/${match[2]}`;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function resolveVideoUrl(url) {
+  if (!url) return null;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    const resolvers = [
+      { pattern: /wish|playnix|medix|niramirus|kravaxxa|davioad|haxlopp|tryzendm|dumbalag|dhcplay|hglink/i, fn: resolveStreamwish },
+      { pattern: /streamtape/i, fn: resolveStreamtape },
+      { pattern: /voe/i, fn: resolveVoe },
+      { pattern: /mp4upload/i, fn: resolveMP4Upload },
+      { pattern: /pixeldrain|pdrain/i, fn: resolvePDrain },
+    ];
+    for (const resolver of resolvers) {
+      if (resolver.pattern.test(hostname)) {
+        const resolved = await resolver.fn(url);
+        if (resolved) return resolved;
+      }
+    }
+    return url;
+  } catch (e) {
+    return null;
+  }
+}
+
 class Provider {
   constructor() {
     this.currentSlug = null;
@@ -164,11 +259,20 @@ class Provider {
       const html = await fetchHtml(episodeUrl);
       const videoUrls = extractVideoLinks(html, episodeUrl);
 
-      if (videoUrls.length === 0) {
+      const resolvedUrls = [];
+      for (const url of videoUrls) {
+        if (url.includes('zilla-networks.com')) continue;
+        const resolved = await resolveVideoUrl(url);
+        if (resolved && !resolvedUrls.includes(resolved)) {
+          resolvedUrls.push(resolved);
+        }
+      }
+
+      if (resolvedUrls.length === 0) {
         return { server: "AnimeAV1", headers: {}, videoSources: [] };
       }
 
-      const videoSources = videoUrls.map(url => ({
+      const videoSources = resolvedUrls.map(url => ({
         url: url,
         type: url.includes('.m3u8') ? 'm3u8' : 'mp4',
         quality: '1080p',
@@ -177,7 +281,8 @@ class Provider {
       return {
         server: "AnimeAV1",
         headers: {
-          "Referer": "https://animeav1.com/"
+          "Referer": "https://animeav1.com/",
+          "Origin": "https://animeav1.com"
         },
         videoSources: videoSources,
       };
