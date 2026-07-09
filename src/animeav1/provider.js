@@ -1,3 +1,4 @@
+
 /// <reference path="./online-streaming-provider.d.ts" />
 
 const DEFAULT_DOMAIN = "animeav1.com";
@@ -16,6 +17,7 @@ async function fetchHtml(url) {
   return await response.text();
 }
 
+// Extrae la lista de episodios de la página del anime (como antes)
 function extractEpisodesFromHtml(html, baseUrl) {
   const episodes = [];
   const regex = /href="\/media\/([^\/]+)\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -57,10 +59,50 @@ function extractEpisodesFromHtml(html, baseUrl) {
   return episodes;
 }
 
+// Función de filtrado mejorada
+function isLikelyVideoUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed === '') return false;
+
+  // Descarta enlaces que son páginas HTML del sitio (otros episodios, etc.)
+  if (trimmed.includes('/media/') && !/\.(m3u8|mp4|webm|mkv|avi|mov|flv|wmv)$/i.test(trimmed)) {
+    return false;
+  }
+
+  // Descarta recursos estáticos (CSS, JS, fuentes, imágenes)
+  if (/\.(css|js|woff2?|ttf|svg|png|jpg|jpeg|gif|ico)(\?|$)/i.test(trimmed)) {
+    return false;
+  }
+
+  // Extensiones de video directas
+  if (/\.(m3u8|mp4|webm|mkv|avi|mov|flv|wmv)$/i.test(trimmed)) {
+    return true;
+  }
+
+  // Dominios de servicios de video conocidos
+  if (/(pixeldrain|mega\.nz|mp4upload|1fichier|streamwish|streamtape|voe|vidhide|hqq|filemoon|okru|fembed|uns\.bio|zilla-networks|player\.)/i.test(trimmed)) {
+    return true;
+  }
+
+  // Palabras clave de video, pero con filtros extra
+  if (/(video|stream|embed|play|file|watch|download)/i.test(trimmed) &&
+      !trimmed.includes('googletagmanager') &&
+      !trimmed.includes('cloudflare') &&
+      !trimmed.includes('analytics') &&
+      !trimmed.includes('beacon')) {
+    return true;
+  }
+
+  return false;
+}
+
+// Extrae enlaces de video mejorado
 function extractVideoLinks(html, url) {
   const found = [];
 
-  const attrRegex = /(?:src|href|data-src|data-href)=["']([^"']*\.(?:m3u8|mp4|webm|mkv|avi|embed|player|pixeldrain|mega|mp4upload|1fichier|zilla|uns\.bio)[^"']*)["']/gi;
+  // 1. Atributos específicos de fuentes de video
+  const attrRegex = /(?:src|href|data-src|data-href|data-url|data-file|data-video|data-embed|data-source|data-stream)=["']([^"']*)["']/gi;
   let match;
   while ((match = attrRegex.exec(html)) !== null) {
     let videoUrl = match[1];
@@ -70,95 +112,52 @@ function extractVideoLinks(html, url) {
         videoUrl = new URL(videoUrl, base.origin).toString();
       } catch (_) { continue; }
     }
-    if (videoUrl && !found.includes(videoUrl)) {
+    if (videoUrl && isLikelyVideoUrl(videoUrl) && !found.includes(videoUrl)) {
       found.push(videoUrl);
     }
   }
 
-  if (found.length === 0) {
-    const generalRegex = /https?:\/\/(?:www\.)?(?:pixeldrain\.com|mega\.nz|mp4upload\.com|1fichier\.com|player\.[^\s"'<>]+|[^\s"'<>]*zilla[^\s"'<>]*|[^\s"'<>]*uns\.bio[^\s"'<>]*)[^\s"'<>]*/gi;
-    const generalUrls = html.match(generalRegex) || [];
-    generalUrls.forEach(u => { if (!found.includes(u)) found.push(u); });
+  // 2. Buscar en scripts (patrones de configuración de reproductores)
+  const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+  let scriptMatch;
+  while ((scriptMatch = scriptRegex.exec(html)) !== null) {
+    const scriptContent = scriptMatch[1];
+    const scriptUrls = scriptContent.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|embed|player|pixeldrain|mega|mp4upload|1fichier|zilla|uns\.bio|streamwish|streamtape|voe|vidhide|hqq|filemoon|okru|fembed)[^\s"'<>]*/gi) || [];
+    scriptUrls.forEach(u => {
+      if (isLikelyVideoUrl(u) && !found.includes(u)) found.push(u);
+    });
   }
 
-  if (found.length === 0) {
-    const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
-    let scriptMatch;
-    while ((scriptMatch = scriptRegex.exec(html)) !== null) {
-      const scriptContent = scriptMatch[1];
-      const scriptUrls = scriptContent.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|embed|player|pixeldrain|mega|mp4upload|1fichier|zilla|uns\.bio)[^\s"'<>]*/gi) || [];
-      scriptUrls.forEach(u => { if (!found.includes(u)) found.push(u); });
+  // 3. Enlaces de descarga directa (etiquetas <a> con texto "Descargar")
+  const downloadRegex = /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>[\s\S]*?(?:Descargar|download)[\s\S]*?<\/a>/gi;
+  let downloadMatch;
+  while ((downloadMatch = downloadRegex.exec(html)) !== null) {
+    const urlCandidate = downloadMatch[1];
+    if (urlCandidate && isLikelyVideoUrl(urlCandidate) && !found.includes(urlCandidate)) {
+      found.push(urlCandidate);
     }
   }
 
-  return found;
+  // 4. Buscar URLs de video en el HTML general (solo aquellas con extensión de video o dominios conocidos)
+  const generalRegex = /https?:\/\/(?:www\.)?(?:pixeldrain\.com|mega\.nz|mp4upload\.com|1fichier\.com|player\.[^\s"'<>]+|[^\s"'<>]*zilla[^\s"'<>]*|[^\s"'<>]*uns\.bio[^\s"'<>]*|streamwish|streamtape|voe|vidhide|hqq|filemoon|okru|fembed)[^\s"'<>]*\.(?:m3u8|mp4|webm|mkv|avi|embed|play|file)/gi;
+  const generalUrls = html.match(generalRegex) || [];
+  generalUrls.forEach(u => {
+    if (isLikelyVideoUrl(u) && !found.includes(u)) found.push(u);
+  });
+
+  // Eliminar duplicados y devolver
+  return [...new Set(found)];
 }
 
-async function resolveStreamwish(url) {
+// Resolvedores para MP4Upload y Mega (igual que antes)
+async function resolveMP4Upload(embedUrl) {
   try {
-    const html = await fetchHtml(url);
-    let match = html.match(/(https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*)/i);
-    if (match && match[1]) return match[1];
-    match = html.match(/data-src=["']([^"']+\.m3u8[^"']*)["']/i);
-    if (match && match[1]) return match[1];
-    const scriptMatch = html.match(/<script[^>]*>([\s\S]*?var\s+sources\s*=\s*\[[\s\S]*?\];[\s\S]*?)<\/script>/i);
-    if (scriptMatch) {
-      const urlMatch = scriptMatch[1].match(/src\s*:\s*["'](https?:\/\/[^"']+)["']/i);
-      if (urlMatch && urlMatch[1]) return urlMatch[1];
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
-}
-
-async function resolveStreamtape(url) {
-  try {
-    const html = await fetchHtml(url);
-    const match = html.match(/document\.getElementById\('norobotlink'\)\.innerHTML\s*=\s*(.+?);/);
-    if (!match) return null;
-    const tokenMatch = match[1].match(/token=([^&']+)/);
-    if (!tokenMatch) return null;
-    const token = tokenMatch[1];
-    const streamtapeMatch = html.match(/id\s*=\s*"ideoooolink"/);
-    if (!streamtapeMatch) return null;
-    const tagEnd = html.indexOf(">", streamtapeMatch.index) + 1;
-    const videoUrl = html.substring(tagEnd, html.indexOf("<", tagEnd));
-    return `https:${videoUrl}&token=${token}&dl=1`;
-  } catch (e) {
-    return null;
-  }
-}
-
-async function resolveVoe(url) {
-  try {
-    const html = await fetchHtml(url);
-    let match = html.match(/(https?:\/\/[^\s"'<>]+\.(?:mp4|m3u8)[^\s"'<>]*)/i);
-    if (match && match[1]) return match[1];
-    match = html.match(/src=["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i);
-    if (match && match[1]) return match[1];
-    return null;
-  } catch (e) {
-    return null;
-  }
-}
-
-async function resolveMP4Upload(url) {
-  try {
-    const html = await fetchHtml(url);
-    const match = html.match(/<script(?:.|\n)+?src:(?:.|\n)*?"(.+?\.mp4)"/);
-    if (match && match[1]) return match[1];
-    return null;
-  } catch (e) {
-    return null;
-  }
-}
-
-async function resolvePDrain(url) {
-  try {
-    const match = url.match(/(.+?:\/\/.+?)\/.+?\/(.+?)(?:\?embed)?$/);
-    if (match && match[1] && match[2]) {
-      return `${match[1]}/api/file/${match[2]}`;
+    const html = await fetchHtml(embedUrl);
+    const match = html.match(/src:\s*['"](https?:\/\/[^'"]+\.mp4[^'"]*)['"]/i) ||
+                  html.match(/<video[^>]*src="([^"]+\.mp4)"/i) ||
+                  html.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/i);
+    if (match && match[1]) {
+      return match[1];
     }
     return null;
   } catch (e) {
@@ -166,26 +165,15 @@ async function resolvePDrain(url) {
   }
 }
 
-async function resolveVideoUrl(url) {
-  if (!url) return null;
+async function resolveMega(embedUrl) {
   try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    const resolvers = [
-      { pattern: /wish|playnix|medix|niramirus|kravaxxa|davioad|haxlopp|tryzendm|dumbalag|dhcplay|hglink/i, fn: resolveStreamwish },
-      { pattern: /streamtape/i, fn: resolveStreamtape },
-      { pattern: /voe/i, fn: resolveVoe },
-      { pattern: /mp4upload/i, fn: resolveMP4Upload },
-      { pattern: /pixeldrain|pdrain/i, fn: resolvePDrain },
-    ];
-    for (const resolver of resolvers) {
-      if (resolver.pattern.test(hostname)) {
-        const resolved = await resolver.fn(url);
-        if (resolved) return resolved;
-      }
+    const match = embedUrl.match(/mega\.nz\/embed\/([^#]+)/);
+    if (match && match[1]) {
+      return `https://mega.nz/file/${match[1]}`;
     }
-    return url;
-  } catch (e) {
-    return null;
+    return embedUrl;
+  } catch {
+    return embedUrl;
   }
 }
 
@@ -257,13 +245,19 @@ class Provider {
     try {
       const episodeUrl = `https://${DEFAULT_DOMAIN}/media/${slug}/${episode.id}`;
       const html = await fetchHtml(episodeUrl);
-      const videoUrls = extractVideoLinks(html, episodeUrl);
+      let videoUrls = extractVideoLinks(html, episodeUrl);
 
+      // Resolver MP4Upload y Mega
       const resolvedUrls = [];
       for (const url of videoUrls) {
-        if (url.includes('zilla-networks.com')) continue;
-        const resolved = await resolveVideoUrl(url);
-        if (resolved && !resolvedUrls.includes(resolved)) {
+        let resolved = url;
+        if (url.includes('mp4upload.com/embed-')) {
+          const mp4 = await resolveMP4Upload(url);
+          if (mp4) resolved = mp4;
+        } else if (url.includes('mega.nz/embed/')) {
+          resolved = await resolveMega(url);
+        }
+        if (resolved && isLikelyVideoUrl(resolved) && !resolvedUrls.includes(resolved)) {
           resolvedUrls.push(resolved);
         }
       }
@@ -271,6 +265,15 @@ class Provider {
       if (resolvedUrls.length === 0) {
         return { server: "AnimeAV1", headers: {}, videoSources: [] };
       }
+
+      // Priorizar enlaces directos (con extensión .mp4 o .m3u8)
+      resolvedUrls.sort((a, b) => {
+        const aExt = /\.(mp4|m3u8)$/i.test(a);
+        const bExt = /\.(mp4|m3u8)$/i.test(b);
+        if (aExt && !bExt) return -1;
+        if (!aExt && bExt) return 1;
+        return 0;
+      });
 
       const videoSources = resolvedUrls.map(url => ({
         url: url,
