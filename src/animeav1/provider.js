@@ -17,7 +17,6 @@ async function fetchHtml(url) {
   return await response.text();
 }
 
-// Extrae la lista de episodios de la página del anime (como antes)
 function extractEpisodesFromHtml(html, baseUrl) {
   const episodes = [];
   const regex = /href="\/media\/([^\/]+)\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -59,49 +58,18 @@ function extractEpisodesFromHtml(html, baseUrl) {
   return episodes;
 }
 
-// Función de filtrado mejorada
-function isLikelyVideoUrl(url) {
+// Filtrar solo URLs que contengan "animeav1" (y que sean páginas de episodios)
+function isAnimeAV1EpisodeUrl(url) {
   if (!url || typeof url !== 'string') return false;
-  const trimmed = url.trim();
-  if (trimmed === '') return false;
-
-  // Descarta enlaces que son páginas HTML del sitio (otros episodios, etc.)
-  if (trimmed.includes('/media/') && !/\.(m3u8|mp4|webm|mkv|avi|mov|flv|wmv)$/i.test(trimmed)) {
-    return false;
-  }
-
-  // Descarta recursos estáticos (CSS, JS, fuentes, imágenes)
-  if (/\.(css|js|woff2?|ttf|svg|png|jpg|jpeg|gif|ico)(\?|$)/i.test(trimmed)) {
-    return false;
-  }
-
-  // Extensiones de video directas
-  if (/\.(m3u8|mp4|webm|mkv|avi|mov|flv|wmv)$/i.test(trimmed)) {
-    return true;
-  }
-
-  // Dominios de servicios de video conocidos
-  if (/(pixeldrain|mega\.nz|mp4upload|1fichier|streamwish|streamtape|voe|vidhide|hqq|filemoon|okru|fembed|uns\.bio|zilla-networks|player\.)/i.test(trimmed)) {
-    return true;
-  }
-
-  // Palabras clave de video, pero con filtros extra
-  if (/(video|stream|embed|play|file|watch|download)/i.test(trimmed) &&
-      !trimmed.includes('googletagmanager') &&
-      !trimmed.includes('cloudflare') &&
-      !trimmed.includes('analytics') &&
-      !trimmed.includes('beacon')) {
-    return true;
-  }
-
-  return false;
+  // Debe contener animeav1.com/media/ y terminar con un número
+  const regex = /https?:\/\/(?:www\.)?animeav1\.com\/media\/[^\/]+\/\d+$/i;
+  return regex.test(url.trim());
 }
 
-// Extrae enlaces de video mejorado
 function extractVideoLinks(html, url) {
   const found = [];
 
-  // 1. Atributos específicos de fuentes de video
+  // 1. Buscar enlaces en atributos que puedan contener URLs
   const attrRegex = /(?:src|href|data-src|data-href|data-url|data-file|data-video|data-embed|data-source|data-stream)=["']([^"']*)["']/gi;
   let match;
   while ((match = attrRegex.exec(html)) !== null) {
@@ -112,69 +80,41 @@ function extractVideoLinks(html, url) {
         videoUrl = new URL(videoUrl, base.origin).toString();
       } catch (_) { continue; }
     }
-    if (videoUrl && isLikelyVideoUrl(videoUrl) && !found.includes(videoUrl)) {
+    if (videoUrl && isAnimeAV1EpisodeUrl(videoUrl) && !found.includes(videoUrl)) {
       found.push(videoUrl);
     }
   }
 
-  // 2. Buscar en scripts (patrones de configuración de reproductores)
+  // 2. Buscar en scripts (pueden contener URLs de animeav1)
   const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
   let scriptMatch;
   while ((scriptMatch = scriptRegex.exec(html)) !== null) {
     const scriptContent = scriptMatch[1];
-    const scriptUrls = scriptContent.match(/https?:\/\/[^\s"'<>]+\.(?:m3u8|mp4|embed|player|pixeldrain|mega|mp4upload|1fichier|zilla|uns\.bio|streamwish|streamtape|voe|vidhide|hqq|filemoon|okru|fembed)[^\s"'<>]*/gi) || [];
+    const scriptUrls = scriptContent.match(/https?:\/\/[^\s"'<>]+animeav1\.com\/media\/[^\s"'<>]+\/\d+/gi) || [];
     scriptUrls.forEach(u => {
-      if (isLikelyVideoUrl(u) && !found.includes(u)) found.push(u);
+      if (isAnimeAV1EpisodeUrl(u) && !found.includes(u)) found.push(u);
     });
   }
 
-  // 3. Enlaces de descarga directa (etiquetas <a> con texto "Descargar")
+  // 3. Buscar enlaces de descarga directa que apunten a animeav1
   const downloadRegex = /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>[\s\S]*?(?:Descargar|download)[\s\S]*?<\/a>/gi;
   let downloadMatch;
   while ((downloadMatch = downloadRegex.exec(html)) !== null) {
     const urlCandidate = downloadMatch[1];
-    if (urlCandidate && isLikelyVideoUrl(urlCandidate) && !found.includes(urlCandidate)) {
+    if (urlCandidate && isAnimeAV1EpisodeUrl(urlCandidate) && !found.includes(urlCandidate)) {
       found.push(urlCandidate);
     }
   }
 
-  // 4. Buscar URLs de video en el HTML general (solo aquellas con extensión de video o dominios conocidos)
-  const generalRegex = /https?:\/\/(?:www\.)?(?:pixeldrain\.com|mega\.nz|mp4upload\.com|1fichier\.com|player\.[^\s"'<>]+|[^\s"'<>]*zilla[^\s"'<>]*|[^\s"'<>]*uns\.bio[^\s"'<>]*|streamwish|streamtape|voe|vidhide|hqq|filemoon|okru|fembed)[^\s"'<>]*\.(?:m3u8|mp4|webm|mkv|avi|embed|play|file)/gi;
+  // 4. Buscar cualquier URL que contenga animeav1.com/media/ y termine en número
+  const generalRegex = /https?:\/\/(?:www\.)?animeav1\.com\/media\/[^\/]+\/\d+/gi;
   const generalUrls = html.match(generalRegex) || [];
   generalUrls.forEach(u => {
-    if (isLikelyVideoUrl(u) && !found.includes(u)) found.push(u);
+    if (isAnimeAV1EpisodeUrl(u) && !found.includes(u)) found.push(u);
   });
 
-  // Eliminar duplicados y devolver
+  // Eliminar duplicados
   return [...new Set(found)];
-}
-
-// Resolvedores para MP4Upload y Mega (igual que antes)
-async function resolveMP4Upload(embedUrl) {
-  try {
-    const html = await fetchHtml(embedUrl);
-    const match = html.match(/src:\s*['"](https?:\/\/[^'"]+\.mp4[^'"]*)['"]/i) ||
-                  html.match(/<video[^>]*src="([^"]+\.mp4)"/i) ||
-                  html.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/i);
-    if (match && match[1]) {
-      return match[1];
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
-}
-
-async function resolveMega(embedUrl) {
-  try {
-    const match = embedUrl.match(/mega\.nz\/embed\/([^#]+)/);
-    if (match && match[1]) {
-      return `https://mega.nz/file/${match[1]}`;
-    }
-    return embedUrl;
-  } catch {
-    return embedUrl;
-  }
 }
 
 class Provider {
@@ -247,37 +187,15 @@ class Provider {
       const html = await fetchHtml(episodeUrl);
       let videoUrls = extractVideoLinks(html, episodeUrl);
 
-      // Resolver MP4Upload y Mega
-      const resolvedUrls = [];
-      for (const url of videoUrls) {
-        let resolved = url;
-        if (url.includes('mp4upload.com/embed-')) {
-          const mp4 = await resolveMP4Upload(url);
-          if (mp4) resolved = mp4;
-        } else if (url.includes('mega.nz/embed/')) {
-          resolved = await resolveMega(url);
-        }
-        if (resolved && isLikelyVideoUrl(resolved) && !resolvedUrls.includes(resolved)) {
-          resolvedUrls.push(resolved);
-        }
-      }
-
-      if (resolvedUrls.length === 0) {
+      // Solo conservamos URLs que sean de animeav1 (ya filtrado en extractVideoLinks)
+      if (videoUrls.length === 0) {
         return { server: "AnimeAV1", headers: {}, videoSources: [] };
       }
 
-      // Priorizar enlaces directos (con extensión .mp4 o .m3u8)
-      resolvedUrls.sort((a, b) => {
-        const aExt = /\.(mp4|m3u8)$/i.test(a);
-        const bExt = /\.(mp4|m3u8)$/i.test(b);
-        if (aExt && !bExt) return -1;
-        if (!aExt && bExt) return 1;
-        return 0;
-      });
-
-      const videoSources = resolvedUrls.map(url => ({
+      // Convertir a videoSources (las URLs son páginas HTML, pero el usuario así lo quiere)
+      const videoSources = videoUrls.map(url => ({
         url: url,
-        type: url.includes('.m3u8') ? 'm3u8' : 'mp4',
+        type: 'html', // Aunque no es un video directo, lo dejamos como 'mp4' para que intente cargarlo
         quality: '1080p',
       }));
 
