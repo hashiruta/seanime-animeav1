@@ -1,0 +1,12 @@
+{
+  "id": "animeav1-es", 
+  "name": "AnimeAV1 (ES)",
+  "description": "Proveedor de streaming para AnimeAV1 con subtítulos en español.",
+  "manifestURI": "https://raw.githubusercontent.com/tu-usuario/tu-repositorio/main/manifest.json",
+  "version": "1.0.0",
+  "author": "TuNombre",
+  "type": "onlinestream-provider", 
+  "language": "javascript",
+  "lang": "es",
+  "payloadURI": "https://raw.githubusercontent.com/tu-usuario/tu-repositorio/main/provider.js"
+}
