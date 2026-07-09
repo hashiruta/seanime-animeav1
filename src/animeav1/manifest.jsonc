@@ -3,7 +3,7 @@
   "name": "AnimeAV1 (ES)",
   "description": "Proveedor de streaming para AnimeAV1 con subtítulos en español.",
   "manifestURI": "https://raw.githubusercontent.com/hashiruta/seanime-animeav1/main/src/animeav1/manifest.jsonc",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Hashiruta",
   "type": "onlinestream-provider",
   "language": "javascript",
